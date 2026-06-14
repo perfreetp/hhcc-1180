@@ -49,6 +49,17 @@ def _today():
 def _now():
     return datetime.now().strftime("%H:%M")
 
+def _now_ts():
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+def _find_window(windows, wid, only_active=False):
+    for w in windows:
+        if w["id"] == wid:
+            if only_active and w["status"] != "active":
+                return None
+            return w
+    return None
+
 # ─── 录入飞行窗口 ───
 def cmd_add_window(args):
     items = _load("windows")
@@ -172,47 +183,69 @@ def cmd_add_contact(args):
 def cmd_confirm(args):
     windows = _load("windows")
     wid = args.window_id
-    target = None
-    for w in windows:
-        if w["id"] == wid and w["status"] == "active":
-            target = w
-            break
+    target = _find_window(windows, wid, only_active=True)
     if not target:
         print(f"✘ 未找到活跃窗口 #{wid}")
         return
+    biz_date = args.biz_date or target["date"]
     items = _load("confirmations")
+    existing = next((c for c in items if c["window_id"] == wid and c["date"] == biz_date), None)
+    if existing:
+        existing["confirmer"] = args.confirmer
+        existing["time"] = _now()
+        existing["notes"] = args.notes or existing.get("notes", "")
+        existing["created_at"] = _now_ts()
+        tag = "（补录更新）" if biz_date != _today() else ""
+        _save("confirmations", items)
+        print(f"✔ 窗口#{wid} 放飞前确认已更新{tag}  业务日:{biz_date}  确认人:{args.confirmer}  {_now()}")
+        return
     entry = {
         "id": _next_id(items),
         "window_id": wid,
         "confirmer": args.confirmer,
         "time": _now(),
-        "date": _today(),
+        "date": biz_date,
+        "created_at": _now_ts(),
         "notes": args.notes or "",
     }
     items.append(entry)
     _save("confirmations", items)
-    print(f"✔ 窗口#{wid} 放飞前确认已记录  确认人:{entry['confirmer']}  {entry['time']}")
+    tag = "（补录）" if biz_date != _today() else ""
+    print(f"✔ 窗口#{wid} 放飞前确认已记录{tag}  业务日:{biz_date}  确认人:{entry['confirmer']}  {entry['time']}")
 
 # ─── 补记异常返航 ───
 def cmd_abnormal(args):
     windows = _load("windows")
     wid = args.window_id
-    found = any(w["id"] == wid for w in windows)
-    if not found:
+    target = _find_window(windows, wid)
+    if not target:
         print(f"✘ 未找到窗口 #{wid}")
         return
+    biz_date = args.biz_date or target["date"]
     items = _load("abnormals")
+    existing = next((a for a in items if a["window_id"] == wid and a["date"] == biz_date), None)
+    if existing:
+        existing["return_time"] = args.time or existing.get("return_time", _now())
+        existing["reason"] = args.reason
+        existing["notes"] = args.notes or existing.get("notes", "")
+        existing["created_at"] = _now_ts()
+        tag = "（补录更新）" if biz_date != _today() else ""
+        _save("abnormals", items)
+        print(f"✔ 窗口#{wid} 异常返航已更新{tag}  业务日:{biz_date}  {existing['return_time']}  原因:{args.reason}")
+        return
     entry = {
         "id": _next_id(items),
         "window_id": wid,
         "return_time": args.time or _now(),
-        "date": _today(),
+        "date": biz_date,
+        "created_at": _now_ts(),
         "reason": args.reason,
         "notes": args.notes or "",
     }
     items.append(entry)
     _save("abnormals", items)
-    print(f"✔ 窗口#{wid} 异常返航已补记  {entry['return_time']}  原因:{entry['reason']}")
+    tag = "（补录）" if biz_date != _today() else ""
+    print(f"✔ 窗口#{wid} 异常返航已补记{tag}  业务日:{biz_date}  {entry['return_time']}  原因:{entry['reason']}")
 
 # ─── 输出口头播报稿 ───
 def cmd_broadcast(args):
@@ -286,17 +319,30 @@ def cmd_sms(args):
 # ─── 快速查询当天占用 ───
 def cmd_today(args):
     windows = _load("windows")
+    confirmations = _load("confirmations")
+    reviews = _load("reviews")
+    abnormals = _load("abnormals")
     check_date = args.date or _today()
     day_w = [w for w in windows if w["date"] == check_date and w["status"] == "active"]
     if not day_w:
         print(f"✔ {check_date} 无活跃飞行窗口")
         return
+    confirmed_ids = {c["window_id"] for c in confirmations if c["date"] == check_date}
+    reviewed_ids = {r["window_id"] for r in reviews if r["date"] == check_date}
+    abnormal_ids = {a["window_id"] for a in abnormals if a["date"] == check_date}
     applicants = {a["id"]: a for a in _load("applicants")}
     print(f"📋 {check_date} 占用情况（{len(day_w)}个窗口）：")
     for w in sorted(day_w, key=lambda x: x["start"]):
         ap = applicants.get(w["applicant_id"], {})
+        status_bits = []
+        status_bits.append("确认" if w["id"] in confirmed_ids else "未确认")
+        status_bits.append("复核" if w["id"] in reviewed_ids else "未复核")
+        if w["id"] in abnormal_ids:
+            status_bits.append("异常返航")
+        status_str = " | ".join(status_bits)
         print(f"  #{w['id']}  {w['start']}-{w['end']}  {w['township']}  "
               f"{w['alt_min']}-{w['alt_max']}m  申请方:{ap.get('name','?')}  用途:{w.get('purpose','')}")
+        print(f"         状态: {status_str}")
 
 # ─── 按乡镇筛冲突 ───
 def cmd_conflict(args):
@@ -396,13 +442,11 @@ def cmd_streak(args):
     if last_miss:
         print(f"  上次漏报日期：{last_miss}")
 
-def _record_streak():
+def _record_streak(for_date=None):
     stats = _load("stats")
     if not stats:
         stats = {"streak": 0, "last_miss_date": None, "last_streak_date": None}
-    today = _today()
-    if stats.get("last_miss_date") == today:
-        return False
+    today = for_date or _today()
     if stats.get("last_streak_date") == today:
         return False
     stats["streak"] = stats.get("streak", 0) + 1
@@ -410,14 +454,15 @@ def _record_streak():
     _save("stats", stats)
     return True
 
-def _break_streak(reason=""):
+def _break_streak(reason="", for_date=None):
     stats = _load("stats")
     if not stats:
         stats = {"streak": 0, "last_miss_date": None, "last_streak_date": None}
+    today = for_date or _today()
     if stats.get("streak", 0) > 0:
         print(f"⚠ 连续零漏报中断（之前连续{stats['streak']}天）原因：{reason}")
     stats["streak"] = 0
-    stats["last_miss_date"] = _today()
+    stats["last_miss_date"] = today
     stats["last_streak_date"] = None
     _save("stats", stats)
 
@@ -425,28 +470,60 @@ def _break_streak(reason=""):
 def cmd_star(args):
     windows = _load("windows")
     wid = args.window_id
-    found = any(w["id"] == wid for w in windows)
-    if not found:
+    target = _find_window(windows, wid)
+    if not target:
         print(f"✘ 未找到窗口 #{wid}")
         return
+    biz_date = args.biz_date or target["date"]
     items = _load("reviews")
+    existing = next((r for r in items if r["window_id"] == wid and r["date"] == biz_date), None)
+    if existing:
+        existing["reviewer"] = args.reviewer
+        existing["time"] = _now()
+        existing["created_at"] = _now_ts()
+        _save("reviews", items)
+        tag = "（补录更新）" if biz_date != _today() else ""
+        print(f"⭐ 窗口#{wid} 复核已更新{tag}  业务日:{biz_date}  复核人:{args.reviewer}  不重复计数")
+        return
     entry = {
         "id": _next_id(items),
         "window_id": wid,
         "reviewer": args.reviewer,
         "on_time": True,
-        "date": _today(),
+        "date": biz_date,
+        "created_at": _now_ts(),
         "time": _now(),
     }
     items.append(entry)
     _save("reviews", items)
-    streak_added = _record_streak()
-    if streak_added:
-        print(f"⭐ 窗口#{wid} 按时复核加星  复核人:{args.reviewer}  今日连续零漏报已累计")
+    streak_added = False
+    if biz_date == _today():
+        streak_added = _record_streak()
+    tag = "（补录）" if biz_date != _today() else ""
+    if biz_date == _today() and streak_added:
+        print(f"⭐ 窗口#{wid} 按时复核加星{tag}  业务日:{biz_date}  复核人:{args.reviewer}  今日连续零漏报已累计")
     else:
-        print(f"⭐ 窗口#{wid} 按时复核加星  复核人:{args.reviewer}")
+        print(f"⭐ 窗口#{wid} 按时复核加星{tag}  业务日:{biz_date}  复核人:{args.reviewer}")
 
-# ─── 补分关卡（遗漏项） ───
+# ─── 补录判断工具 ───
+def _is_backfilled(record, window):
+    created = record.get("created_at", "")
+    if not created:
+        return False
+    biz_date = record.get("date", "")
+    try:
+        created_day = created.split(" ")[0]
+        if created_day > biz_date:
+            return True
+        if created_day == biz_date:
+            created_time = created.split(" ")[1]
+            if created_time > window["end"]:
+                return True
+    except (IndexError, ValueError):
+        pass
+    return False
+
+# ─── 补分关卡（增强：区分即时完成 / 补录完成 / 遗漏） ───
 def cmd_gaps(args):
     windows = _load("windows")
     confirmations = _load("confirmations")
@@ -455,38 +532,141 @@ def cmd_gaps(args):
     check_date = args.date or _today()
     now = _now()
 
-    confirmed_ids = {c["window_id"] for c in confirmations if c["date"] == check_date}
-    reviewed_ids = {r["window_id"] for r in reviews if r["date"] == check_date}
-    abnormal_ids = {a["window_id"] for a in abnormals if a["date"] == check_date}
+    conf_by_win = {c["window_id"]: c for c in confirmations if c["date"] == check_date}
+    rev_by_win = {r["window_id"]: r for r in reviews if r["date"] == check_date}
+    abn_by_win = {a["window_id"]: a for a in abnormals if a["date"] == check_date}
 
     day_w = [w for w in windows if w["date"] == check_date and w["status"] == "active"]
+    if not day_w:
+        print(f"✔ {check_date} 无活跃飞行窗口")
+        return
+
+    done_prompt = []
+    done_backfill = []
     gaps = []
+
+    def classify(record, window, check_type, desc_done, desc_miss):
+        rid = window["id"]
+        if rid in record:
+            rec = record[rid]
+            if _is_backfilled(rec, window):
+                done_backfill.append(f"[补录] 窗口#{rid} {desc_done}  补录于{rec.get('created_at','?')}")
+            else:
+                done_prompt.append(f"[正常] 窗口#{rid} {desc_done}")
+        else:
+            is_past = (check_date < _today()) or (check_date == _today() and window["end"] <= now)
+            if check_type in ("确认", "复核") and not is_past:
+                pass
+            elif check_type == "异常返航漏记":
+                if rid in conf_by_win and rid not in rev_by_win and is_past:
+                    gaps.append({"type": "异常返航漏记", "detail": f"窗口#{rid} 已结束但无异常返航记录，请核实是否需补记"})
+            else:
+                gaps.append({"type": desc_miss, "detail": f"窗口#{rid} {desc_miss}"})
+
     for w in day_w:
-        if w["id"] not in confirmed_ids:
-            gaps.append({"window_id": w["id"], "type": "未确认", "detail": f"窗口#{w['id']} 放飞前未确认"})
-        if w["id"] not in reviewed_ids:
-            gaps.append({"window_id": w["id"], "type": "未复核", "detail": f"窗口#{w['id']} 尚未按时复核"})
-        if w["id"] in confirmed_ids and w["id"] not in reviewed_ids and w["id"] not in abnormal_ids:
-            is_past = (check_date < _today()) or (check_date == _today() and w["end"] <= now)
-            if is_past:
-                gaps.append({"window_id": w["id"], "type": "异常返航漏记",
-                             "detail": f"窗口#{w['id']} 已结束但无异常返航记录，请核实是否需补记"})
+        classify(conf_by_win, w, "确认", "放飞前已确认", "放飞前未确认")
+    for w in day_w:
+        classify(rev_by_win, w, "复核", "已按时复核", "尚未按时复核")
+    for w in day_w:
+        classify(abn_by_win, w, "异常返航漏记", "有异常返航记录", None)
 
     nofly = _load("nofly")
     day_nf = [n for n in nofly if n["date"] == check_date]
+    nf_conflicts = []
     for n in day_nf:
         conflict_windows = [w for w in day_w if w["township"] == n["township"]
                            and not (w["end"] <= n["start"] or n["end"] <= w["start"])]
         for w in conflict_windows:
-            gaps.append({"window_id": w["id"], "type": "禁飞冲突", "detail": f"窗口#{w['id']} 与禁飞冲突未处理"})
+            nf_conflicts.append({"window_id": w["id"], "reason": n["reason"],
+                                "detail": f"窗口#{w['id']} 与禁飞冲突未处理（原因:{n['reason']}）"})
+    # 禁飞冲突统一归为遗漏
+    for nc in nf_conflicts:
+        gaps.append({"type": "禁飞冲突", "detail": nc["detail"]})
 
-    if not gaps:
-        print(f"✔ {check_date} 无遗漏项，全部关卡已通过！")
-    else:
-        print(f"🎯 {check_date} 补分关卡（{len(gaps)}项遗漏）：")
+    print(f"📊 {check_date} 补分关卡总览")
+    if done_prompt:
+        print(f"\n✅ 正常完成（{len(done_prompt)}项）：")
+        for line in done_prompt:
+            print(f"  {line}")
+    if done_backfill:
+        print(f"\n🔧 补录完成（{len(done_backfill)}项）：")
+        for line in done_backfill:
+            print(f"  {line}")
+    if gaps:
+        print(f"\n🎯 仍待补（{len(gaps)}项）：")
         for i, g in enumerate(gaps, 1):
             print(f"  {i}. [{g['type']}] {g['detail']}")
-        _break_streak(f"{len(gaps)}项遗漏未处理")
+    if not gaps:
+        print(f"\n✔ {check_date} 全部关卡已通过，无遗留问题！")
+        if check_date == _today():
+            _record_streak()
+    return {
+        "done_prompt": len(done_prompt),
+        "done_backfill": len(done_backfill),
+        "gaps": len(gaps),
+        "gaps_detail": gaps,
+    }
+
+# ─── 日结命令 ───
+def cmd_daily_summary(args):
+    check_date = args.date or _today()
+    windows = _load("windows")
+    confirmations = _load("confirmations")
+    reviews = _load("reviews")
+    abnormals = _load("abnormals")
+    nofly = _load("nofly")
+    duty = _load("duty")
+
+    day_w = [w for w in windows if w["date"] == check_date and w["status"] == "active"]
+    total_w = len(day_w)
+    conf_list = [c for c in confirmations if c["date"] == check_date]
+    rev_list = [r for r in reviews if r["date"] == check_date]
+    abn_list = [a for a in abnormals if a["date"] == check_date]
+    conf_ids = {c["window_id"] for c in conf_list}
+    rev_ids = {r["window_id"] for r in rev_list}
+    abn_ids = {a["window_id"] for a in abn_list}
+
+    nf_conflicts = 0
+    day_nf = [n for n in nofly if n["date"] == check_date]
+    for n in day_nf:
+        for w in day_w:
+            if w["township"] == n["township"] and not (w["end"] <= n["start"] or n["end"] <= w["start"]):
+                nf_conflicts += 1
+
+    duty_today = next((d for d in duty if d["date"] == check_date), None)
+
+    print(f"═══════════════════════════════════════════")
+    print(f"  低空飞行服务点  日结报告  {check_date}")
+    print(f"═══════════════════════════════════════════")
+    if duty_today:
+        print(f"值班协调员：{duty_today['coordinator']}  {duty_today.get('phone','')}")
+    print(f"")
+    print(f"飞行窗口     ：{total_w} 个")
+    print(f"放飞前已确认 ：{len(conf_ids)} / {total_w}")
+    print(f"按时已复核   ：{len(rev_ids)} / {total_w}")
+    print(f"异常返航记录 ：{len(abn_ids)} 条")
+    print(f"禁飞冲突     ：{nf_conflicts} 组")
+    print(f"")
+
+    result = cmd_gaps(args)
+    gaps_count = result["gaps"] if result else 0
+
+    print(f"")
+    print(f"───────────────────────────────────────────")
+    if gaps_count == 0:
+        print(f"🏆 日结结论：当天收工干净，达标！")
+        if check_date == _today():
+            added = _record_streak()
+            stats = _load("stats")
+            print(f"🔥 当前连续零漏报：{stats.get('streak',0)} 天" + ("（今日已计入）" if not added else ""))
+        else:
+            print(f"（历史日结，不触发 streak）")
+    else:
+        print(f"⚠  日结结论：仍有 {gaps_count} 项遗漏待补")
+        if check_date == _today():
+            print(f"  今日暂未达标，请处理完遗漏项后再跑 daily-summary 确认")
+    print(f"═══════════════════════════════════════════")
+
 
 # ─── 列出申请方 ───
 def cmd_list_applicants(args):
@@ -584,15 +764,17 @@ def build_parser():
     co2 = sub.add_parser("list-contacts", help="列出联络人")
     co2.set_defaults(func=cmd_list_contacts)
 
-    cf = sub.add_parser("confirm", help="记录放飞前确认")
+    cf = sub.add_parser("confirm", help="记录放飞前确认（支持补录挂到业务日期）")
     cf.add_argument("--window-id", type=int, required=True, help="窗口ID")
     cf.add_argument("--confirmer", required=True, help="确认人")
+    cf.add_argument("--biz-date", help="业务日期(YYYY-MM-DD)，默认取窗口飞行日")
     cf.add_argument("--notes", help="备注")
     cf.set_defaults(func=cmd_confirm)
 
-    ab = sub.add_parser("abnormal", help="补记异常返航")
+    ab = sub.add_parser("abnormal", help="补记异常返航（支持补录挂到业务日期）")
     ab.add_argument("--window-id", type=int, required=True, help="窗口ID")
     ab.add_argument("--reason", required=True, help="原因")
+    ab.add_argument("--biz-date", help="业务日期(YYYY-MM-DD)，默认取窗口飞行日")
     ab.add_argument("--time", help="返航时间，默认当前")
     ab.add_argument("--notes", help="备注")
     ab.set_defaults(func=cmd_abnormal)
@@ -605,7 +787,7 @@ def build_parser():
     sm.add_argument("--date", help="日期，默认今天")
     sm.set_defaults(func=cmd_sms)
 
-    td = sub.add_parser("today", help="快速查询当天占用")
+    td = sub.add_parser("today", help="快速查询当天占用（带确认/复核/异常状态）")
     td.add_argument("--date", help="日期，默认今天")
     td.set_defaults(func=cmd_today)
 
@@ -629,14 +811,19 @@ def build_parser():
     st = sub.add_parser("streak", help="累计连续零漏报天数")
     st.set_defaults(func=cmd_streak)
 
-    sr = sub.add_parser("star", help="给按时复核加星")
+    sr = sub.add_parser("star", help="给按时复核加星（同窗口同业务日去重，支持补录）")
     sr.add_argument("--window-id", type=int, required=True, help="窗口ID")
     sr.add_argument("--reviewer", required=True, help="复核人")
+    sr.add_argument("--biz-date", help="业务日期(YYYY-MM-DD)，默认取窗口飞行日")
     sr.set_defaults(func=cmd_star)
 
-    gp = sub.add_parser("gaps", help="补分关卡（遗漏项）")
+    gp = sub.add_parser("gaps", help="补分关卡（区分正常完成/补录完成/仍待补）")
     gp.add_argument("--date", help="日期，默认今天")
     gp.set_defaults(func=cmd_gaps)
+
+    ds = sub.add_parser("daily-summary", help="日结汇总：已确认/已复核/异常/冲突/遗漏 + streak 达标判断")
+    ds.add_argument("--date", help="业务日期，默认今天")
+    ds.set_defaults(func=cmd_daily_summary)
 
     return p
 
