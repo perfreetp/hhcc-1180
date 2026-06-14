@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "window_id": 1,
+    "confirmer": "王安全",
+    "time": "11:20",
+    "date": "2026-06-14",
+    "notes": ""
+  },
+  {
+    "id": 2,
+    "window_id": 2,
+    "confirmer": "王安全",
+    "time": "11:20",
+    "date": "2026-06-14",
+    "notes": "天气晴好"
+  }
+]

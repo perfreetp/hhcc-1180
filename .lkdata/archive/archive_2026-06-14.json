@@ -1,0 +1,14 @@
+[
+  {
+    "id": 4,
+    "date": "2026-06-13",
+    "start": "09:00",
+    "end": "11:00",
+    "alt_min": 60,
+    "alt_max": 150,
+    "township": "龙潭乡",
+    "applicant_id": 2,
+    "purpose": "植保",
+    "status": "archived"
+  }
+]

@@ -1,0 +1,50 @@
+[
+  {
+    "id": 1,
+    "date": "2026-06-14",
+    "start": "08:00",
+    "end": "10:00",
+    "alt_min": 50,
+    "alt_max": 120,
+    "township": "城关镇",
+    "applicant_id": 1,
+    "purpose": "航拍",
+    "status": "active"
+  },
+  {
+    "id": 2,
+    "date": "2026-06-14",
+    "start": "09:00",
+    "end": "11:00",
+    "alt_min": 80,
+    "alt_max": 200,
+    "township": "城关镇",
+    "applicant_id": 2,
+    "purpose": "测绘",
+    "status": "active"
+  },
+  {
+    "id": 3,
+    "date": "2026-06-14",
+    "start": "14:00",
+    "end": "16:00",
+    "alt_min": 30,
+    "alt_max": 100,
+    "township": "白鹤乡",
+    "applicant_id": 1,
+    "purpose": "巡检",
+    "status": "active"
+  },
+  {
+    "id": 4,
+    "date": "2026-06-13",
+    "start": "09:00",
+    "end": "11:00",
+    "alt_min": 60,
+    "alt_max": 150,
+    "township": "龙潭乡",
+    "applicant_id": 2,
+    "purpose": "植保",
+    "status": "archived"
+  }
+]
