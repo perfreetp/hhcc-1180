@@ -383,11 +383,14 @@ def cmd_archive(args):
 def cmd_streak(args):
     stats = _load("stats")
     if not stats:
-        stats = {"streak": 0, "last_miss_date": None}
+        stats = {"streak": 0, "last_miss_date": None, "last_streak_date": None}
     streak = stats.get("streak", 0)
     last_miss = stats.get("last_miss_date")
+    last_streak = stats.get("last_streak_date")
     if streak > 0:
         print(f"🔥 连续零漏报天数：{streak} 天")
+        if last_streak == _today():
+            print(f"  今日已计入")
     else:
         print("尚无连续零漏报记录")
     if last_miss:
@@ -396,21 +399,26 @@ def cmd_streak(args):
 def _record_streak():
     stats = _load("stats")
     if not stats:
-        stats = {"streak": 0, "last_miss_date": None}
+        stats = {"streak": 0, "last_miss_date": None, "last_streak_date": None}
     today = _today()
     if stats.get("last_miss_date") == today:
-        return
+        return False
+    if stats.get("last_streak_date") == today:
+        return False
     stats["streak"] = stats.get("streak", 0) + 1
+    stats["last_streak_date"] = today
     _save("stats", stats)
+    return True
 
 def _break_streak(reason=""):
     stats = _load("stats")
     if not stats:
-        stats = {"streak": 0, "last_miss_date": None}
+        stats = {"streak": 0, "last_miss_date": None, "last_streak_date": None}
     if stats.get("streak", 0) > 0:
         print(f"⚠ 连续零漏报中断（之前连续{stats['streak']}天）原因：{reason}")
     stats["streak"] = 0
     stats["last_miss_date"] = _today()
+    stats["last_streak_date"] = None
     _save("stats", stats)
 
 # ─── 给按时复核加星 ───
@@ -432,8 +440,11 @@ def cmd_star(args):
     }
     items.append(entry)
     _save("reviews", items)
-    _record_streak()
-    print(f"⭐ 窗口#{wid} 按时复核加星  复核人:{args.reviewer}  连续零漏报+1")
+    streak_added = _record_streak()
+    if streak_added:
+        print(f"⭐ 窗口#{wid} 按时复核加星  复核人:{args.reviewer}  今日连续零漏报已累计")
+    else:
+        print(f"⭐ 窗口#{wid} 按时复核加星  复核人:{args.reviewer}")
 
 # ─── 补分关卡（遗漏项） ───
 def cmd_gaps(args):
@@ -442,6 +453,7 @@ def cmd_gaps(args):
     reviews = _load("reviews")
     abnormals = _load("abnormals")
     check_date = args.date or _today()
+    now = _now()
 
     confirmed_ids = {c["window_id"] for c in confirmations if c["date"] == check_date}
     reviewed_ids = {r["window_id"] for r in reviews if r["date"] == check_date}
@@ -454,6 +466,11 @@ def cmd_gaps(args):
             gaps.append({"window_id": w["id"], "type": "未确认", "detail": f"窗口#{w['id']} 放飞前未确认"})
         if w["id"] not in reviewed_ids:
             gaps.append({"window_id": w["id"], "type": "未复核", "detail": f"窗口#{w['id']} 尚未按时复核"})
+        if w["id"] in confirmed_ids and w["id"] not in reviewed_ids and w["id"] not in abnormal_ids:
+            is_past = (check_date < _today()) or (check_date == _today() and w["end"] <= now)
+            if is_past:
+                gaps.append({"window_id": w["id"], "type": "异常返航漏记",
+                             "detail": f"窗口#{w['id']} 已结束但无异常返航记录，请核实是否需补记"})
 
     nofly = _load("nofly")
     day_nf = [n for n in nofly if n["date"] == check_date]
